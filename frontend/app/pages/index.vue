@@ -1,15 +1,24 @@
 <template>
   <div class="fixed w-full h-full">
-    <div class="relative w-full h-full flex">
+    <div class="relative w-full h-full flex flex-col md:flex-row">
       
       <!-- ROI FORM container -->
-      <div class="p-10 text-black relative overflow-y-auto transition-all duration-700 ease-in-out" :class="hasResult ? 'w-1/2' : 'w-full'">
-        <h1 class="font-bold">
-          Welcome to Astra Gen AI ROI
-        </h1>
-        <p class="text-gray-500">
-          Please fill out all the field to get the insight, make sure the value are based on calculation from ROI
-        </p>
+      <div class="w-full md:w-1/2 p-4 md:p-10 text-black relative overflow-y-auto transition-all duration-700 ease-in-out" :class="{ 'hidden md:block': showResultsMobile }">
+        
+        <div class="space-y-10">
+          <figure>
+            <img src="/astra-logo.png" alt="">
+          </figure>
+          
+          <div class="space-y-2">
+            <h1 class="font-bold">
+              Welcome to Astra Gen AI ROI
+            </h1>
+            <p class="text-gray-500">
+              Please fill out all the field to get the insight, make sure the value are based on calculation from ROI
+            </p>
+          </div>
+        </div>
 
         <form class="mt-8 space-y-6 pb-10" @submit="handleSubmit">
           <div class="grid grid-cols-2 gap-6">
@@ -19,7 +28,7 @@
               <legend class="fieldset-legend">
                 Unit Name <span class="text-error">*</span>
               </legend>
-              <input v-model="inputData.unit_name" type="text" placeholder="e.g Truck ABC" class="input input-bordered w-full" :class="{ 'input-error': errors.unit_name }" aria-label="Unit Name">
+              <input v-model="inputData.unit_name" type="text" placeholder="e.g TRAGA BOX" class="input input-bordered w-full" :class="{ 'input-error': errors.unit_name }" aria-label="Unit Name">
               <div v-if="errors.unit_name" class="label">
                 <span class="label-text-alt text-error">{{ errors.unit_name }}</span>
               </div>
@@ -45,11 +54,14 @@
                 <option disabled selected value="">
                   --Select Segment--
                 </option>
-                <option>Segment A</option>
-                <option>Segment B</option>
-                <option>Segment C</option>
+                <option>Agriculture, Forestry & Fishing</option>
+                <option>Accommodation</option>
+                <option>Construction</option>
+                <option>Courier</option>
+                <option>Distributor & Retail</option>
+                <option>Education</option>
               </select>
-              <div v-if="errors.segment" class="label">
+              <div v-if="errors.segment" class="label"c>
                 <span class="label-text-alt text-error">{{ errors.segment }}</span>
               </div>
             </fieldset>
@@ -207,233 +219,228 @@
           </div>
 
           <!-- Submit Button -->
-          <div class="mt-8 flex justify-center gap-4 w-full">
+          <div class="mt-8 flex flex-wrap justify-center gap-4 w-full">
+            <button type="button" class="btn btn-outline btn-error" @click="handleClear">
+              Clear Value
+            </button>
             <button type="button" class="btn btn-outline btn-secondary" @click="fillTestData">
               Fill Test Data
             </button>
-            <button type="button" class="btn btn-soft btn-primary" @click="handleClear">
-              Clear Value
-            </button>
             <button type="submit" class="btn btn-primary" :disabled="isSubmitting">
               <span v-if="isSubmitting" class="loading loading-spinner loading-sm" />
-              {{ isSubmitting ? 'Calculating...' : 'Calculate ROI' }}
+              {{ isSubmitting ? 'Calculating...' : 'Generate Insight' }}
             </button>
           </div>
         </form>
       </div>
       
       <!-- analisys result container -->
-      <div class="h-full bg-white shadow-md relative overflow-y-auto transition-all duration-700 ease-in-out" :class="(hasResult || isSubmitting) ? 'w-1/2 p-10 opacity-100' : 'w-0 p-0 opacity-0 overflow-hidden'">
+      <div 
+        class="h-full bg-white w-full md:w-1/2 p-4 md:p-10 shadow-md relative overflow-y-auto transition-all duration-700 ease-in-out" 
+        :class="[
+          (hasResult || isSubmitting) ? '' : 'overflow-hidden',
+          showResultsMobile ? 'fixed inset-0 z-40 md:relative md:z-auto' : 'hidden md:block'
+        ]"
+      >
         
+        <!-- Init State -->
+        <div v-if="!isSubmitting && !hasResult && !resultData" class="flex flex-col items-center justify-center h-full">
+          <h3 class="text-lg font-bold text-black mb-2">The result of your analysis will show here</h3>
+          <p class="text-[#656565] text-center text-md">Please input your ROI value and AI will generate the insight for you</p>
+        </div>
+
         <!-- Loading State -->
         <div v-if="isSubmitting && !hasResult" class="flex flex-col items-center justify-center h-full">
           <div class="loading loading-spinner loading-lg text-primary mb-4" />
-          <h3 class="text-xl font-bold text-blue-900 mb-2">Analyzing Your Data...</h3>
-          <p class="text-gray-600 text-center">AI sedang menganalisis data kendaraan Anda</p>
+          <h3 class="text-lg font-bold text-black mb-2">Analyzing Your Data...</h3>
+          <p class="text-[#656565] text-center text-md">AI sedang menganalisis data kendaraan Anda</p>
         </div>
 
         <!-- Results -->
-        <div v-if="hasResult && resultData" ref="resultsContainer">
-          <h2 class="font-bold text-xl mb-4 text-blue-900">
+        <div v-if="hasResult && resultData" ref="resultsContainer" class="relative">
+          <h2 class="font-bold text-xl mb-4 text-black">
             📊 Hasil Analisis ROI
           </h2>
           
-          <!-- Summary Card -->
-          <div class="p-4 border-2 border-blue-200 rounded-lg bg-gradient-to-r from-blue-50 to-blue-100 mb-4">
-            <h3 class="font-bold text-blue-900 mb-2 text-lg">
-              {{ resultData.unit_name }}
+          
+
+          <!-- Overall Insight (AI Generated) -->
+          <div v-if="resultData.overall_insight" class="p-5 border-2 border-green-300 rounded-lg bg-gradient-to-br from-green-50 to-emerald-50 shadow-md mb-4">
+            <h3 class="font-bold text-xl mb-4 flex items-center gap-2 text-green-900">
+              <span>Overall Insight</span>
             </h3>
-            <div class="grid grid-cols-2 gap-2 text-sm">
-              <div>
-                <span class="text-gray-700 font-medium">Segment:</span>
-                <span class="font-semibold ml-2">{{ resultData.segment }}</span>
-              </div>
-              <div>
-                <span class="text-gray-700 font-medium">Leasing:</span>
-                <span class="font-semibold ml-2">{{ resultData.uses_leasing ? 'Ya' : 'Tidak' }}</span>
-              </div>
+            <div class="prose prose-sm max-w-none">
+              <p ref="overallNarrative" class="text-gray-800 leading-relaxed whitespace-pre-line text-sm">{{ resultData.overall_insight.summary }}</p>
             </div>
           </div>
 
           <div class="space-y-4">
             <!-- ROI Analysis -->
             <div v-if="resultData.roi" class="p-4 border rounded-lg" :class="getCategoryColor(resultData.roi.category)">
-              <h3 class="font-bold text-lg mb-2 flex items-center gap-2">
-                <span>💰</span>
-                <span>ROI Analysis</span>
-              </h3>
-              <div class="space-y-2 text-sm">
-                <div class="flex justify-between items-center">
+              <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-xl mb-3 flex items-center gap-2">
+                  <span>ROI (Return on Investment)</span>
+                </h3>
+                <span class="px-3 py-1 rounded-full font-semibold text-sm" :class="getCategoryBadge(resultData.roi.category)">
+                  {{ resultData.roi.category }}
+                </span>
+              </div>
+              <div class="space-y-3 text-sm">
+                <div class="flex justify-between items-center mb-3">
                   <span class="text-gray-700">ROI:</span>
-                  <span class="font-bold text-lg">{{ resultData.roi.percentage }}</span>
+                  <span class="font-bold text-2xl">{{ resultData.roi.percentage }}</span>
                 </div>
-                <div class="flex justify-between items-center">
-                  <span class="text-gray-700">Kategori:</span>
-                  <span class="px-3 py-1 rounded-full font-semibold text-sm" :class="getCategoryBadge(resultData.roi.category)">
-                    {{ resultData.roi.category }}
-                  </span>
+                <div v-if="resultData.roi.short_sentence" class="mt-3 pt-3 border-t border-gray-200">
+                  <p class="text-gray-800 font-semibold text-base">{{ resultData.roi.short_sentence }}</p>
                 </div>
-                <div v-if="resultData.roi.short_sentence" class="mt-2">
-                  <p class="text-gray-800 font-medium">{{ resultData.roi.short_sentence }}</p>
-                </div>
-                <div v-if="resultData.roi.insight_narrative" class="mt-2">
-                  <p class="text-gray-700 leading-relaxed">{{ resultData.roi.insight_narrative }}</p>
+                <div v-if="resultData.roi.insight_narrative" class="mt-3 p-3 bg-white bg-opacity-50 rounded-lg">
+                  <p ref="roiNarrative" class="text-gray-700 leading-relaxed whitespace-pre-line">{{ resultData.roi.insight_narrative }}</p>
                 </div>
               </div>
             </div>
 
             <!-- TCO Analysis -->
             <div v-if="resultData.tco" class="p-4 border rounded-lg bg-purple-50 border-purple-200">
-              <h3 class="font-bold text-lg mb-2 flex items-center gap-2">
-                <span>📈</span>
-                <span>TCO Analysis</span>
-              </h3>
-              <div class="space-y-2 text-sm">
+              <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-xl mb-3 flex items-center gap-2">
+                  <span>TCO (Total Cost of Ownership)</span>
+                </h3>
+                <span class="px-3 py-1 rounded-full font-semibold text-sm bg-purple-200 text-purple-900">
+                  {{ resultData.tco.category }}
+                </span>
+              </div>
+              <div class="space-y-3 text-sm">
                 <div class="flex justify-between">
                   <span class="text-gray-700">Biaya per KM:</span>
-                  <span class="font-semibold">{{ resultData.tco.amount_rp }}</span>
+                  <span class="font-semibold text-lg">{{ resultData.tco.amount_rp }}</span>
                 </div>
-                <div class="flex justify-between items-center">
-                  <span class="text-gray-700">Efisiensi:</span>
-                  <span class="px-3 py-1 rounded-full font-semibold text-sm bg-purple-200 text-purple-900">
-                    {{ resultData.tco.category }}
-                  </span>
+                <div v-if="resultData.tco.short_sentence" class="mt-3 pt-3 border-t border-purple-200">
+                  <p class="text-gray-800 font-semibold text-base">{{ resultData.tco.short_sentence }}</p>
                 </div>
-                <div v-if="resultData.tco.short_sentence" class="mt-2">
-                  <p class="text-gray-800 font-medium">{{ resultData.tco.short_sentence }}</p>
-                </div>
-                <div v-if="resultData.tco.insight_narrative" class="mt-2">
-                  <p class="text-gray-700 leading-relaxed">{{ resultData.tco.insight_narrative }}</p>
+                <div v-if="resultData.tco.insight_narrative" class="mt-3 p-3 bg-white bg-opacity-50 rounded-lg">
+                  <p ref="tcoNarrative" class="text-gray-700 leading-relaxed whitespace-pre-line">{{ resultData.tco.insight_narrative }}</p>
                 </div>
               </div>
             </div>
 
             <!-- Owning vs Operational Costs -->
             <div v-if="resultData.owning_vs_operational" class="p-4 border rounded-lg bg-orange-50 border-orange-200">
-              <h3 class="font-bold text-lg mb-2 flex items-center gap-2">
-                <span>🔄</span>
-                <span>Struktur Biaya</span>
-              </h3>
+              <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-xl mb-3 flex items-center gap-2">
+                  <span>Owning vs Operational Cost</span>
+                </h3>
+                <span class="px-3 py-1 rounded-full font-semibold text-sm bg-orange-200 text-orange-900">
+                  {{ resultData.owning_vs_operational.category }}
+                </span>
+              </div>
               <div class="space-y-3 text-sm">
                 <div class="space-y-1">
                   <div class="flex justify-between">
                     <span class="text-gray-700">Owning Cost:</span>
-                    <span class="font-semibold">{{ resultData.owning_vs_operational.owning_percentage }}%</span>
+                    <span class="font-semibold text-lg">{{ resultData.owning_vs_operational.owning_percentage }}%</span>
                   </div>
-                  <div class="w-full bg-gray-200 rounded-full h-2">
-                    <div class="bg-orange-500 h-2 rounded-full" :style="{ width: resultData.owning_vs_operational.owning_percentage + '%' }" />
+                  <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div class="bg-orange-500 h-3 rounded-full transition-all duration-1000" :style="{ width: resultData.owning_vs_operational.owning_percentage + '%' }" />
                   </div>
                 </div>
                 <div class="space-y-1">
                   <div class="flex justify-between">
                     <span class="text-gray-700">Operational Cost:</span>
-                    <span class="font-semibold">{{ resultData.owning_vs_operational.operational_percentage }}%</span>
+                    <span class="font-semibold text-lg">{{ resultData.owning_vs_operational.operational_percentage }}%</span>
                   </div>
-                  <div class="w-full bg-gray-200 rounded-full h-2">
-                    <div class="bg-blue-500 h-2 rounded-full" :style="{ width: resultData.owning_vs_operational.operational_percentage + '%' }" />
+                  <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div class="bg-blue-500 h-3 rounded-full transition-all duration-1000" :style="{ width: resultData.owning_vs_operational.operational_percentage + '%' }" />
                   </div>
                 </div>
-                <div class="flex justify-between items-center mt-2">
-                  <span class="text-gray-700">Kategori:</span>
-                  <span class="px-3 py-1 rounded-full font-semibold text-sm bg-orange-200 text-orange-900">
-                    {{ resultData.owning_vs_operational.category }}
-                  </span>
+                <div v-if="resultData.owning_vs_operational.short_sentence" class="mt-3 pt-3 border-t border-orange-200">
+                  <p class="text-gray-800 font-semibold text-base">{{ resultData.owning_vs_operational.short_sentence }}</p>
                 </div>
-                <div v-if="resultData.owning_vs_operational.short_sentence" class="mt-2">
-                  <p class="text-gray-800 font-medium">{{ resultData.owning_vs_operational.short_sentence }}</p>
-                </div>
-                <div v-if="resultData.owning_vs_operational.cashflow_implication" class="mt-2">
-                  <p class="text-gray-700 leading-relaxed">{{ resultData.owning_vs_operational.cashflow_implication }}</p>
+                <div v-if="resultData.owning_vs_operational.cashflow_implication" class="mt-3 p-3 bg-white bg-opacity-50 rounded-lg">
+                  <p ref="cashflowNarrative" class="text-gray-700 leading-relaxed whitespace-pre-line">{{ resultData.owning_vs_operational.cashflow_implication }}</p>
                 </div>
               </div>
             </div>
 
             <!-- Break-Even Point -->
             <div v-if="resultData.break_even_point" class="p-4 border rounded-lg bg-teal-50 border-teal-200">
-              <h3 class="font-bold text-lg mb-2 flex items-center gap-2">
-                <span>⏱️</span>
-                <span>Break-Even Point</span>
-              </h3>
-              <div class="space-y-2 text-sm">
+              
+              <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-xl mb-3 flex items-center gap-2">
+                  <span>Break Even Point (BEP)</span>
+                </h3>
+                <span class="px-3 py-1 rounded-full font-semibold text-sm bg-teal-200 text-teal-900">
+                  {{ resultData.break_even_point.category }}
+                </span>
+              </div>
+              <div class="space-y-3 text-sm">
                 <div class="flex justify-between">
                   <span class="text-gray-700">Periode BEP:</span>
-                  <span class="font-semibold">{{ resultData.break_even_point.period }}</span>
+                  <span class="font-semibold text-lg">{{ resultData.break_even_point.period }}</span>
                 </div>
                 <div class="flex justify-between">
                   <span class="text-gray-700">BEP (KM):</span>
-                  <span class="font-semibold">{{ resultData.break_even_point.bep_km }}</span>
+                  <span class="font-semibold text-lg">{{ resultData.break_even_point.bep_km }}</span>
                 </div>
-                <div class="flex justify-between items-center">
-                  <span class="text-gray-700">Kategori:</span>
-                  <span class="px-3 py-1 rounded-full font-semibold text-sm bg-teal-200 text-teal-900">
-                    {{ resultData.break_even_point.category }}
-                  </span>
-                </div>
-                <div v-if="resultData.break_even_point.short_sentence" class="mt-2">
-                  <p class="text-gray-800 font-medium">{{ resultData.break_even_point.short_sentence }}</p>
+                <div v-if="resultData.break_even_point.short_sentence" class="mt-3 pt-3 border-t border-teal-200">
+                  <p class="text-gray-800 font-semibold text-base">{{ resultData.break_even_point.short_sentence }}</p>
                 </div>
                 
                 <!-- Monthly Simulation -->
-                <div v-if="resultData.break_even_point.monthly_simulation" class="mt-3 p-3 bg-teal-100 rounded-lg">
-                  <h4 class="font-semibold text-teal-900 mb-2">Simulasi Bulanan</h4>
-                  <div class="space-y-1">
-                    <div class="flex justify-between">
-                      <span class="text-teal-800">Cicilan:</span>
-                      <span class="font-semibold text-teal-900">{{ resultData.break_even_point.monthly_simulation.installment }}</span>
+                <div v-if="resultData.break_even_point.monthly_simulation" class="mt-3 p-4 bg-teal-100 rounded-lg border border-teal-200">
+                  <h4 class="font-bold text-teal-900 mb-3 text-base">💰 Simulasi Cashflow Bulanan</h4>
+                  <div class="space-y-2">
+                    <div class="flex justify-between items-center p-2 bg-white rounded">
+                      <span class="text-teal-800 font-medium w-1/6 md:w-2/6">Cicilan:</span>
+                      <span class="font-bold text-teal-900 w-5/6 md:w-4/6">{{ resultData.break_even_point.monthly_simulation.installment }}</span>
                     </div>
-                    <div class="flex justify-between">
-                      <span class="text-teal-800">Revenue:</span>
-                      <span class="font-semibold text-teal-900">{{ resultData.break_even_point.monthly_simulation.revenue }}</span>
+                    <div class="flex justify-between items-center p-2 bg-white rounded">
+                      <span class="text-teal-800 font-medium w-1/6 md:w-2/6">Revenue:</span>
+                      <span class="font-bold text-teal-900 w-5/6 md:w-4/6">{{ resultData.break_even_point.monthly_simulation.revenue }}</span>
                     </div>
-                    <div class="flex justify-between">
-                      <span class="text-teal-800">Net Cashflow:</span>
-                      <span class="font-semibold text-teal-900">{{ resultData.break_even_point.monthly_simulation.net_cashflow }}</span>
+                    <div class="flex justify-between items-center p-2 bg-white rounded">
+                      <span class="text-teal-800 font-medium w-1/6 md:w-2/6">Net Cashflow:</span>
+                      <span class="font-bold text-teal-900 w-5/6 md:w-4/6">{{ resultData.break_even_point.monthly_simulation.net_cashflow }}</span>
                     </div>
                   </div>
                 </div>
                 
-                <div v-if="resultData.break_even_point.bep_insight" class="mt-2">
-                  <p class="text-gray-700 leading-relaxed">{{ resultData.break_even_point.bep_insight }}</p>
+                <div v-if="resultData.break_even_point.bep_insight" class="mt-3 p-3 bg-white bg-opacity-50 rounded-lg">
+                  <p ref="bepNarrative" class="text-gray-700 leading-relaxed whitespace-pre-line">{{ resultData.break_even_point.bep_insight }}</p>
                 </div>
               </div>
             </div>
 
             <!-- Contribution Margin -->
             <div v-if="resultData.contribution_margin_per_km" class="p-4 border rounded-lg bg-indigo-50 border-indigo-200">
-              <h3 class="font-bold text-lg mb-2 flex items-center gap-2">
-                <span>💵</span>
-                <span>Contribution Margin</span>
-              </h3>
-              <div class="space-y-2 text-sm">
+              <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-xl mb-3 flex items-center gap-2">
+                  <span>Contribution Margin per KM</span>
+                </h3>
+                <span class="px-3 py-1 rounded-full font-semibold text-sm bg-indigo-200 text-indigo-900">
+                  {{ resultData.contribution_margin_per_km.category }}
+                </span>
+              </div>
+              <div class="space-y-3 text-sm">
                 <div class="flex justify-between">
                   <span class="text-gray-700">Margin per KM:</span>
-                  <span class="font-semibold">{{ resultData.contribution_margin_per_km.margin_rp }}</span>
+                  <span class="font-semibold text-lg">{{ resultData.contribution_margin_per_km.margin_rp }}</span>
                 </div>
-                <div class="flex justify-between items-center">
-                  <span class="text-gray-700">Kategori:</span>
-                  <span class="px-3 py-1 rounded-full font-semibold text-sm bg-indigo-200 text-indigo-900">
-                    {{ resultData.contribution_margin_per_km.category }}
-                  </span>
+                <div v-if="resultData.contribution_margin_per_km.short_sentence" class="mt-3 pt-3 border-t border-indigo-200">
+                  <p class="text-gray-800 font-semibold text-base">{{ resultData.contribution_margin_per_km.short_sentence }}</p>
                 </div>
-                <div v-if="resultData.contribution_margin_per_km.short_sentence" class="mt-2">
-                  <p class="text-gray-800 font-medium">{{ resultData.contribution_margin_per_km.short_sentence }}</p>
-                </div>
-                <div v-if="resultData.contribution_margin_per_km.margin_insight" class="mt-2">
-                  <p class="text-gray-700 leading-relaxed">{{ resultData.contribution_margin_per_km.margin_insight }}</p>
+                <div v-if="resultData.contribution_margin_per_km.margin_insight" class="mt-3 p-3 bg-white bg-opacity-50 rounded-lg">
+                  <p ref="marginNarrative" class="text-gray-700 leading-relaxed whitespace-pre-line">{{ resultData.contribution_margin_per_km.margin_insight }}</p>
                 </div>
               </div>
             </div>
 
-            <!-- Overall Insight (AI Generated) -->
-            <div v-if="resultData.overall_insight" class="p-4 border-2 border-green-300 rounded-lg bg-gradient-to-br from-green-50 to-emerald-50">
-              <h3 class="font-bold text-lg mb-3 flex items-center gap-2 text-green-900">
-                <span>🤖</span>
-                <span>AI-Powered Insights</span>
-              </h3>
-              <div class="prose prose-sm max-w-none">
-                <p class="text-gray-800 leading-relaxed whitespace-pre-line">{{ resultData.overall_insight.summary }}</p>
-              </div>
-            </div>
+          </div>
+
+          <!-- Floating Button to Return to Form (Mobile Only) -->
+          <div class="md:hidden absolute bottom-6 w-full flex justify-center items-center z-50">
+            <button class="btn btn-primary btn-lg !px-10" @click="returnToForm">
+              Generate Insight
+            </button>
           </div>
         </div>
       </div>
@@ -518,6 +525,7 @@ const isSubmitting = ref(false)
 const hasResult = ref(false)
 const resultData = ref(null)
 const resultsContainer = ref(null)
+const showResultsMobile = ref(false)
 
 // Modal state
 const showModal = ref(false)
@@ -601,11 +609,63 @@ const handleModalConfirm = () => {
   closeModal()
 }
 
+// Return to form (mobile)
+const returnToForm = () => {
+  showResultsMobile.value = false
+  // Scroll to top of form on mobile
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+// Text animation refs
+const roiNarrative = ref(null)
+const tcoNarrative = ref(null)
+const cashflowNarrative = ref(null)
+const bepNarrative = ref(null)
+const marginNarrative = ref(null)
+const overallNarrative = ref(null)
+
+// Function to split text into words and animate like AI chat
+const animateTextByWord = (element, delay = 0) => {
+  if (!element) return
+  
+  const text = element.textContent
+  const words = text.split(' ')
+  
+  // Clear the element and set up container
+  element.textContent = ''
+  element.style.whiteSpace = 'pre-wrap'
+  
+  // Animate words appearing one by one
+  let currentIndex = 0
+  
+  const showNextWord = () => {
+    if (currentIndex < words.length) {
+      const span = document.createElement('span')
+      span.textContent = words[currentIndex] + (currentIndex < words.length - 1 ? ' ' : '')
+      span.style.opacity = '0'
+      element.appendChild(span)
+      
+      gsap.to(span, {
+        opacity: 1,
+        duration: 0.1,
+        ease: 'power1.out',
+        onComplete: () => {
+          currentIndex++
+          showNextWord()
+        }
+      })
+    }
+  }
+  
+  // Start animation after delay
+  setTimeout(showNextWord, delay * 1000)
+}
+
 // GSAP Animation for results
 const animateResults = () => {
   nextTick(() => {
     if (!resultsContainer.value) return
-    
+
     // Animate header
     gsap.from(resultsContainer.value.querySelector('h2'), {
       duration: 0.6,
@@ -613,7 +673,7 @@ const animateResults = () => {
       opacity: 0,
       ease: 'power3.out'
     })
-    
+
     // Animate summary card
     const summaryCard = resultsContainer.value.querySelectorAll('.p-4.border-2.border-blue-200')
     gsap.from(summaryCard, {
@@ -623,30 +683,50 @@ const animateResults = () => {
       delay: 0.2,
       ease: 'power3.out'
     })
-    
-    // Animate all analysis cards
-    const cards = resultsContainer.value.querySelectorAll('.space-y-4 > div')
-    gsap.from(cards, {
-      duration: 0.7,
+
+    // Animate overall insight smoothly (fade + scale)
+    const overallCard = resultsContainer.value.querySelectorAll('.border-green-300')
+    gsap.from(overallCard, {
+      duration: 1,
       y: 40,
       opacity: 0,
-      stagger: 0.1,
+      scale: 0.95,
       delay: 0.4,
       ease: 'power3.out'
     })
-    
+
+    // Animate all analysis cards
+    const cards = resultsContainer.value.querySelectorAll('.space-y-4 > div')
+    gsap.from(cards, {
+      duration: 0.8,
+      y: 40,
+      opacity: 0,
+      stagger: 0.15,
+      delay: 0.7,
+      ease: 'power3.out'
+    })
+
     // Animate progress bars
     const progressBars = resultsContainer.value.querySelectorAll('.bg-orange-500, .bg-blue-500')
     progressBars.forEach((bar) => {
       gsap.from(bar, {
         duration: 1.2,
         width: '0%',
-        delay: 0.8,
+        delay: 1.0,
         ease: 'power2.out'
       })
     })
+
+    // Animate text narratives word-by-word
+    setTimeout(() => animateTextByWord(overallNarrative.value, 0.8), 200)
+    setTimeout(() => animateTextByWord(roiNarrative.value, 1.2), 400)
+    setTimeout(() => animateTextByWord(tcoNarrative.value, 1.4), 600)
+    setTimeout(() => animateTextByWord(cashflowNarrative.value, 1.6), 800)
+    setTimeout(() => animateTextByWord(bepNarrative.value, 1.8), 1000)
+    setTimeout(() => animateTextByWord(marginNarrative.value, 2.0), 1200)
   })
 }
+
 
 // Computed formatted values
 const formattedUnitPrice = computed(() => formatNumber(inputData.value.unit_price))
@@ -821,6 +901,7 @@ const clearForm = () => {
   } else {
     hasResult.value = false
     resultData.value = null
+    showResultsMobile.value = false
   }
 }
 
@@ -886,9 +967,15 @@ const handleSubmit = async (event) => {
       ...result
     }
     hasResult.value = true
+    showResultsMobile.value = true
     
     // Animate results
     animateResults()
+    
+    // Scroll to top on mobile
+    if (window.innerWidth < 768) {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
     
   } catch (error) {
     console.error('Submission error:', error)
@@ -936,9 +1023,9 @@ const handleClear = (event) => {
 const fillTestData = (event) => {
   event.preventDefault()
   inputData.value = {
-    unit_name: 'Truck ABC',
+    unit_name: 'ELF NLR',
     unit_price: '12000000',
-    segment: 'Segment A',
+    segment: 'Accommodation',
     uses_leasing: 'false',
     tco: '250000000',
     annual_tco: '25000000',
@@ -973,5 +1060,20 @@ const fillTestData = (event) => {
 
 .animate-fade-in {
   animation: fade-in 0.2s ease-out;
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 768px) {
+  .fixed.inset-0.z-40 {
+    animation: slide-in-right 0.3s ease-out;
+  }
 }
 </style>

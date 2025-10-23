@@ -2,3 +2,31 @@
 @plugin "daisyui" {
   themes: light --default;
 }
+
+* {
+  font-family: 'Poppins', sans-serif;
+}
+
+@utility btn {
+  @apply rounded-full px-6;
+}
+
+@utility btn-primary {
+  background: linear-gradient(90deg,rgba(22, 66, 129, 1) 0%, rgba(4, 121, 227, 1) 100%);
+
+  &.disabled {
+    @apply text-white;
+  }
+
+  &:disabled {
+    @apply text-white;
+  }
+}
+
+@utility btn-secondary {
+  @apply border-[#396CE8] text-[#396CE8] bg-[#396CE8]/10 hover:text-white hover:bg-[#396CE8];
+}
+
+@utility btn-error {
+  @apply hover:text-white;
+}

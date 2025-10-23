@@ -164,7 +164,8 @@ class ContributionMargin:
 
 @dataclass
 class OverallInsight:
-    summary: str
+    summary: str = ""
+    key_insight: str = ""
 
 @dataclass
 class VehicleROIOutput:
@@ -368,96 +369,183 @@ class VehicleROIAnalyzer:
         analysis["dynamic_warnings"] = self.evaluate_dynamic_conditions(data)
 
         return analysis
-    
-        return analysis  # <-- baris terakhir dari class VehicleROIAnalyzer
-
-
-# ==========================================================
-# Tambahkan fungsi generate_overall_insight di sini 👇
-# ==========================================================
-def generate_overall_insight(data):
-    """Generate short, decisive overall summary for vehicle investment"""
-    from google.generativeai import GenerativeModel
-
-    prompt = f"""
-    Anda adalah analis keuangan profesional di bidang transportasi logistik.
-    Berdasarkan data kendaraan berikut:
-
-    - Unit: {data.get('unit_name')}
-    - Segment: {data.get('segment')}
-    - ROI: {data.get('roi')}
-    - BEP (tahun): {data.get('bep_years')}
-    - Margin kontribusi per KM: Rp {data.get('contribution_margin'):,}
-    - Biaya per KM: Rp {data.get('cost_per_km'):,}
-
-    Tulis ringkasan **pendek maksimal 3 kalimat** dalam bahasa Indonesia yang:
-    1. Menyimpulkan kelayakan investasi secara tegas (misalnya “layak dilanjutkan”, “perlu evaluasi”, atau “tidak disarankan”).
-    2. Menyebutkan satu kekuatan utama (misal ROI tinggi, margin sehat, struktur biaya stabil).
-    3. Menyebutkan satu area perbaikan (misal efisiensi biaya, BEP lambat, arus kas awal negatif).
-    4. Tutup dengan rekomendasi langsung yang berorientasi keputusan.
-
-    Gunakan **gaya tegas, profesional, dan padat** — seperti contoh:
-    “Investasi pada ELF NLR layak dilanjutkan dengan catatan peningkatan efisiensi operasional. ROI dan margin menunjukkan performa positif, namun biaya per kilometer masih menekan profit. Fokus pada pengendalian biaya dan peningkatan utilisasi akan memperkuat posisi finansial kendaraan ini.”
-    """
-
-    model = GenerativeModel('gemini-2.5-flash')
-    response = model.generate_content(prompt)
-
-    summary = response.text.strip() if hasattr(response, "text") else ""
-    if len(summary) > 450:
-        summary = summary[:450].rsplit('.', 1)[0] + '.'
-
-    return summary
-
 
 def generate_structured_analysis(analysis_data: Dict[str, Any], raw_data: VehicleInputData) -> VehicleROIOutput:
-    """Generate structured analysis for frontend consumption using Google Gemini"""
+    """Generate structured analysis for frontend using Gemini with safe, neutral prompts.
+       Guarantees structured output even if model is blocked (deterministic fallback)."""
     
-    # Format dynamic warnings for the prompt
-    warnings_text = ""
-    if analysis_data.get('dynamic_warnings'):
-        warnings_list = "\n".join([f"- {warning}" for warning in analysis_data['dynamic_warnings']])
-        warnings_text = f"\n\nPERINGATAN KONDISI DINAMIS:\n{warnings_list}"
-    
-    # Calculate monthly simulation data
-    monthly_installment = raw_data.annual_tco / 12
-    monthly_revenue = raw_data.total_revenue / (raw_data.bep_years * 12) if raw_data.bep_years > 0 else 0
-    monthly_net_cashflow = monthly_revenue - monthly_installment
-    
-    # Simulasi bulanan, hanya hitung cicilan kalau menggunakan leasing
-    # Default nilai simulasi (jika tidak memakai leasing)
-    monthly_installment = 0
-    monthly_revenue = 0
-    monthly_net_cashflow = 0
 
+    # ---------- Helpers ----------
+
+    def pick_bep_non_leasing_sentence(period: str, category: str, seed: str = "") -> str:
+        variants = [
+            f"Periode {period} dikategorikan {category}. Simulasi bulanan tidak diterapkan karena tanpa leasing.",
+            f"BEP {period} termasuk {category}. Tidak ada simulasi cicilan bulanan (tanpa leasing).",
+            f"Estimasi balik modal {period}—kategori {category}. Simulasi bulanan tidak relevan (tanpa leasing).",
+            f"Balik modal diperkirakan {period} ({category}). Tidak ada komponen cicilan bulanan.",
+            f"Horizon BEP {period} diklasifikasikan {category}. Perhitungan arus kas bulanan tidak digunakan karena tidak ada leasing.",
+            f"Durasi BEP {period}—{category}. Simulasi cicilan bulanan tidak berlaku.",
+            f"Waktu impas {period} ({category}). Bagian simulasi bulanan diabaikan (tanpa leasing).",
+            f"Perkiraan BEP {period} pada kategori {category}. Tidak terdapat cicilan bulanan.",
+            f"BEP {period}: {category}. Modul simulasi bulanan tidak aktif (tanpa leasing).",
+            f"BEP {period} tergolong {category}. Simulasi bulanan tidak disertakan (non-leasing).",
+        ]
+        idx = (abs(hash(seed)) % len(variants)) if seed else 0
+        return variants[idx]
+
+
+    def sanitize_neutral(text: str) -> str:
+        """Potong kalimat begitu terdeteksi kata yang berpotensi memicu safety/aksi."""
+        if not text:
+            return ""
+        banned = [
+            "namun", "di sisi lain", "rekomendasi", "strategi", "harus",
+            "segera", "prioritas", "tantangan", "disarankan", "anjurkan",
+            "sebaiknya", "langkah", "action", "mitigasi", "optimasi"
+        ]
+        t = text.strip()
+        low = t.lower()
+        cut = min([low.find(w) for w in banned if low.find(w) != -1] or [len(t)])
+        t = t[:cut].rstrip(" .,\n")
+        return (t + ".") if t and not t.endswith(".") else t
+
+    def build_neutral_output(analysis: Dict[str, Any], vd: VehicleInputData) -> VehicleROIOutput:
+        """Deterministic, objective narratives from computed numbers (no model)."""
+        roi_pct = analysis["roi_analysis"]["value"]
+        roi_cat = analysis["roi_analysis"]["category"]
+        roi_short = f"ROI tercatat {roi_pct} dengan kategori {roi_cat}."
+        roi_long = f"Nilai ROI {roi_pct} merefleksikan kinerja pengembalian sesuai kategori {roi_cat} berdasarkan indikator internal."
+
+        per_km = analysis["tco_analysis"]["per_km"]
+        eff = analysis["tco_analysis"]["efficiency"]
+        tco_short = f"Biaya operasional per kilometer {per_km} dengan klasifikasi {eff}."
+        tco_long = f"Biaya per kilometer {per_km} menunjukkan tingkat efisiensi operasional pada kategori {eff} menurut parameter yang digunakan."
+
+        own = analysis["cost_structure"]["owning_percentage"]
+        opx = analysis["cost_structure"]["operational_percentage"]
+        struct_type = analysis["cost_structure"]["structure_type"]
+        struct_short = f"Komposisi biaya: Owning {own}, Operational {opx} ({struct_type})."
+        struct_imp = f"Komposisi tersebut mencerminkan struktur biaya pada kategori {struct_type} sesuai pembobotan persentase."
+
+        bep_period = analysis["bep_analysis"]["years_formatted"]
+        bep_km = analysis["bep_analysis"]["kilometers"]
+        bep_cat = analysis["bep_analysis"]["category"]
+        bep_short = f"Perkiraan BEP {bep_period} dengan jarak {bep_km}."
+        if vd.uses_leasing:
+            _mi = vd.annual_tco / 12
+            _mr = (vd.total_revenue / (vd.bep_years * 12)) if vd.bep_years > 0 else 0
+            _mn = _mr - _mi
+            monthly_installment = f"Rp {_mi:,.0f}".replace(',', '.')
+            monthly_revenue = f"Rp {_mr:,.0f}".replace(',', '.')
+            monthly_net = f"Rp {_mn:,.0f}".replace(',', '.')
+            bep_ins = (
+                f"Periode {bep_period} dikategorikan {bep_cat}. "
+                f"Simulasi bulanan: cicilan {monthly_installment}, pendapatan {monthly_revenue}, net cashflow {monthly_net}."
+            )
+        else:
+            _mr = (vd.total_revenue / (vd.bep_years * 12)) if vd.bep_years > 0 else 0
+            monthly_installment = "Tidak ada cicilan"
+            monthly_revenue = f"Rp {_mr:,.0f}".replace(',', '.')
+            monthly_net = monthly_revenue  # sama, tanpa cicilan
+            bep_ins = (
+                f"Periode {bep_period} dikategorikan {bep_cat}. "
+                f"Simulasi bulanan: tidak berlaku (tanpa leasing)."
+            )
+        
+        # --- Compose string untuk MonthlySimulation (pakai nama yang benar) ---
+        if vd.uses_leasing:
+            ms_installment = f"{monthly_installment} per bulan"
+            ms_revenue = f"{monthly_revenue} per bulan"
+            ms_net = f"{monthly_net} per bulan"
+        else:
+            ms_installment = "Tidak berlaku (tanpa leasing)"
+            ms_revenue = "Tidak berlaku (tanpa leasing)"
+            ms_net = "Tidak berlaku (tanpa leasing)"
+
+        margin_rp = analysis["margin_analysis"]["per_km"]
+        margin_cat = analysis["margin_analysis"]["category"]
+        margin_short = f"Margin kontribusi per km {margin_rp} (kategori {margin_cat})."
+        margin_long = f"Nilai margin {margin_rp} menggambarkan kontribusi per kilometer sesuai kategori {margin_cat} berdasarkan perhitungan internal."
+
+        oi_summary = (
+            f"Analisis menunjukkan ROI {roi_pct}, biaya per kilometer {per_km}, "
+            f"komposisi biaya Owning {own} dan Operational {opx}, serta perkiraan BEP {bep_period}. "
+            f"Informasi tersebut menggambarkan kondisi finansial unit berdasarkan parameter yang digunakan."
+        )
+        key = f"Kondisi umum selaras dengan kategori ROI: {roi_cat}."
+
+        return VehicleROIOutput(
+            roi=ROIAnalysis(
+                percentage=roi_pct,
+                category=roi_cat,
+                short_sentence=sanitize_neutral(roi_short),
+                insight_narrative=sanitize_neutral(roi_long),
+            ),
+            tco=TCOAnalysis(
+                amount_rp=per_km,
+                category=eff,
+                short_sentence=sanitize_neutral(tco_short),
+                insight_narrative=sanitize_neutral(tco_long),
+            ),
+            owning_vs_operational=OwningVsOperational(
+                owning_percentage=int(vd.owning_pct * 100),
+                operational_percentage=int(vd.operational_pct * 100),
+                category=struct_type,
+                short_sentence=sanitize_neutral(struct_short),
+                cashflow_implication=sanitize_neutral(struct_imp),
+                pie_chart_data=PieChartData(
+                    owning_cost=int(vd.owning_pct * 100),
+                    operational_cost=int(vd.operational_pct * 100),
+                ),
+            ),
+            break_even_point=BreakEvenPoint(
+                period=bep_period,
+                bep_km=bep_km,
+                category=bep_cat,
+                short_sentence=sanitize_neutral(bep_short),
+                monthly_simulation=MonthlySimulation(
+                    installment=ms_installment,
+                    revenue=ms_revenue,
+                    net_cashflow=ms_net,
+                ),
+                bep_insight=sanitize_neutral(bep_ins),
+            ),
+            contribution_margin_per_km=ContributionMargin(
+                margin_rp=margin_rp,
+                category=margin_cat,
+                short_sentence=sanitize_neutral(margin_short),
+                margin_insight=sanitize_neutral(margin_long),
+            ),
+            overall_insight=OverallInsight(
+                summary=sanitize_neutral(oi_summary),
+                key_insight=sanitize_neutral(key),
+            ),
+            
+        )
+
+    # ---------- Build prompt (tanpa warnings_text) ----------
+    # Hitung simulasi bulanan -> hanya ada cicilan jika uses_leasing = True
     if raw_data.uses_leasing:
         monthly_installment = raw_data.annual_tco / 12
         monthly_revenue = raw_data.total_revenue / (raw_data.bep_years * 12) if raw_data.bep_years > 0 else 0
         monthly_net_cashflow = monthly_revenue - monthly_installment
-
-        monthly_simulation = f"""
-        💰 Simulasi Cashflow Bulanan
-Cicilan: Rp {monthly_installment:,.0f} per bulan
-Revenue: Rp {monthly_revenue:,.0f} per bulan
-Net Cashflow: Rp {monthly_net_cashflow:,.0f} per bulan
-"""
-        monthly_simulation_note = None
+        monthly_line_for_prompt = f"- Simulasi Bulanan: cicilan Rp {monthly_installment:,.0f}, pendapatan Rp {monthly_revenue:,.0f}, net cashflow Rp {monthly_net_cashflow:,.0f}"
+        monthly_installment_str = f"Rp {monthly_installment:,.0f} per bulan"
+        monthly_revenue_str = f"Rp {monthly_revenue:,.0f} per bulan"
+        monthly_netcash_str = f"Rp {monthly_net_cashflow:,.0f} per bulan"
     else:
-        # Jika tanpa leasing, tampilkan narasi informatif
-        monthly_simulation = """
-💰 Simulasi Cashflow Bulanan
-Simulasi tidak menggunakan leasing; seluruh biaya bersumber dari modal sendiri.
-"""
+        monthly_installment = 0.0
+        monthly_revenue = raw_data.total_revenue / (raw_data.bep_years * 12) if raw_data.bep_years > 0 else 0
+        monthly_net_cashflow = monthly_revenue  # tak ada cicilan -> net = revenue
+        monthly_line_for_prompt = "- Simulasi Bulanan: tidak berlaku (tanpa leasing)"
+        monthly_installment_str = "Tidak ada cicilan"
+        monthly_revenue_str = f"Rp {monthly_revenue:,.0f} per bulan"
+        monthly_netcash_str = f"Rp {monthly_net_cashflow:,.0f} per bulan"
 
-    monthly_installment = 0
-    monthly_revenue = raw_data.total_revenue / (raw_data.bep_years * 12) if raw_data.bep_years > 0 else 0
-    monthly_net_cashflow = monthly_revenue
-    monthly_simulation_note = "Simulasi tidak menggunakan leasing; seluruh biaya bersumber dari modal sendiri."
 
-    
-    prompt = f"""PERAN: Anda adalah seorang analis bisnis keuangan di bidang transportasi logistik dengan keahlian dalam analisis ROI kendaraan.
+    prompt = f"""PERAN: Anda adalah sistem peringkas data yang menghasilkan deskripsi objektif (bukan saran).
 
-TUJUAN: Memberikan analisis ROI kendaraan yang profesional, relevan, dan mudah dipahami oleh user non-teknikal dengan bahasa Indonesia yang jelas, sederhana namun tetap profesional.
+TUJUAN: Hasilkan ringkasan netral, singkat, dan jelas (tanpa rekomendasi/daftar).
 
 DATA KENDARAAN:
 - Nama: {analysis_data['unit_info']['name']}
@@ -466,83 +554,38 @@ DATA KENDARAAN:
 - Menggunakan Leasing: {"Ya" if raw_data.uses_leasing else "Tidak"}
 - Residual Value: {int(raw_data.residual_value_pct * 100)}%
 
-METRIK KEUANGAN:
+METRIK:
 - ROI: {analysis_data['roi_analysis']['value']} [{analysis_data['roi_analysis']['category']}]
-  Insight: {analysis_data['roi_analysis']['insight']}
-  
-- TCO Total: {analysis_data['tco_analysis']['total']}
-- TCO Tahunan: {analysis_data['tco_analysis']['annual']}
-- Biaya per KM: {analysis_data['tco_analysis']['per_km']} [{analysis_data['tco_analysis']['efficiency']}]
-  Insight: {analysis_data['tco_analysis']['insight']}
+- TCO/km: {analysis_data['tco_analysis']['per_km']} [{analysis_data['tco_analysis']['efficiency']}]
+- Struktur Biaya: Owning {analysis_data['cost_structure']['owning_percentage']}, Operational {analysis_data['cost_structure']['operational_percentage']} [{analysis_data['cost_structure']['structure_type']}]
+- BEP: {analysis_data['bep_analysis']['years_formatted']} [{analysis_data['bep_analysis']['category']}], {analysis_data['bep_analysis']['kilometers']}
+- Margin/km: {analysis_data['margin_analysis']['per_km']} [{analysis_data['margin_analysis']['category']}]
+- {monthly_line_for_prompt}
 
-- Struktur Biaya: {analysis_data['cost_structure']['structure_type']}
-  - Owning: {analysis_data['cost_structure']['owning_percentage']}
-  - Operational: {analysis_data['cost_structure']['operational_percentage']}
-  Insight: {analysis_data['cost_structure']['insight']}
-
-- Break Even Point: {analysis_data['bep_analysis']['years_formatted']} [{analysis_data['bep_analysis']['category']}]
-- BEP Kilometer: {analysis_data['bep_analysis']['kilometers']}
-  Insight: {analysis_data['bep_analysis']['insight']}
-
-- Margin Kontribusi per KM: {analysis_data['margin_analysis']['per_km']} [{analysis_data['margin_analysis']['category']}]
-- Revenue per KM: {analysis_data['margin_analysis']['revenue_per_km']}
-- Total Revenue: {analysis_data['margin_analysis']['total_revenue']}
-  Insight: {analysis_data['margin_analysis']['insight']}
-
-SIMULASI BULANAN:
-- Cicilan/Biaya Bulanan: Rp {monthly_installment:,.0f}
-- Pendapatan Bulanan: Rp {monthly_revenue:,.0f}
-- Net Cashflow Bulanan: Rp {monthly_net_cashflow:,.0f}{warnings_text}
-
-INSTRUKSI OUTPUT:
-Buatlah analisis lengkap dalam format JSON berikut dengan bahasa Indonesia yang profesional namun mudah dipahami:
-
-PANDUAN GAYA DAN PANJANG TEKS:
-- Setiap narasi maksimal 3–5 kalimat saja.
-- Hindari pengulangan ide dalam satu paragraf.
-- Gunakan kalimat yang langsung pada inti insight, bukan deskripsi umum.
-- Hindari penjelasan ulang seperti "ini berarti bahwa..." atau "hal ini menunjukkan bahwa..." lebih dari sekali.
-- Pastikan tone tetap profesional, tetapi ringkas dan jelas agar bisa mantap mengambil keputusan.
-
-1. ROI: Berikan kalimat singkat 3-5 kalimat saja yang menyampaikan hasil ROI, kemudian narasi insight yang menjelaskan implikasi bisnis dari nilai ROI tersebut berdasarkan kategorinya.
-
-2. TCO: Jelaskan efisiensi biaya per kilometer dan bagaimana hal ini mempengaruhi daya saing operasional.
-
-3. Owning vs Operational: Analisis struktur biaya dan implikasinya terhadap arus kas dan fleksibilitas finansial. Jelaskan apakah struktur ini sehat atau perlu penyesuaian.
-
-4. Break Even Point: Jelaskan berapa lama waktu balik modal dalam konteks bisnis transportasi. Sertakan simulasi cashflow bulanan yang realistis dan insight tentang timeline pencapaian BEP.
-
-5. Contribution Margin: Analisis kesehatan margin dan ketahanannya terhadap fluktuasi pasar.
-
-6. Overall Insight: Berikan ringkasan keseluruhan yang mengintegrasikan semua metrik di atas menjadi rekomendasi bisnis yang actionable dan jelas lugas.
-
-PENTING: 
-- Gunakan bahasa yang sederhana dan hindari jargon teknis berlebihan
-- Fokus pada insight bisnis praktis, bukan hanya angka
-- Berikan konteks industri transportasi logistik
-- Sertakan implikasi keputusan bisnis yang jelas
-
-Return JSON dengan struktur berikut:
+INSTRUKSI OUTPUT (WAJIB):
+- Keluaran hanya JSON, tanpa teks lain, tanpa daftar/bullet, tanpa saran/ajakan bertindak.
+- Nada netral dan deskriptif.
+- Format PASTI:
 
 {{
   "roi": {{
     "percentage": "{analysis_data['roi_analysis']['value']}",
     "category": "{analysis_data['roi_analysis']['category']}",
-    "short_sentence": "Kalimat singkat yang menyampaikan hasil ROI dengan jelas",
-    "insight_narrative": "Narasi lengkap yang menjelaskan implikasi bisnis dari ROI, termasuk potensi ekspansi atau risiko yang perlu diperhatikan berdasarkan kategori ROI"
+    "short_sentence": "…",
+    "insight_narrative": "…"
   }},
   "tco": {{
     "amount_rp": "{analysis_data['tco_analysis']['per_km']}",
     "category": "{analysis_data['tco_analysis']['efficiency']}",
-    "short_sentence": "Kalimat singkat tentang efisiensi biaya operasional",
-    "insight_narrative": "Analisis mendalam tentang biaya per km, perbandingan dengan standar industri, dan dampaknya terhadap daya saing serta profitabilitas jangka panjang"
+    "short_sentence": "…",
+    "insight_narrative": "…"
   }},
   "owning_vs_operational": {{
     "owning_percentage": {int(raw_data.owning_pct * 100)},
     "operational_percentage": {int(raw_data.operational_pct * 100)},
     "category": "{analysis_data['cost_structure']['structure_type']}",
-    "short_sentence": "Kalimat singkat tentang komposisi struktur biaya",
-    "cashflow_implication": "Analisis mendalam tentang bagaimana struktur biaya ini mempengaruhi arus kas, fleksibilitas finansial, dan rekomendasi apakah perlu penyesuaian (misalnya pertimbangan leasing jika owning terlalu dominan)",
+    "short_sentence": "…",
+    "cashflow_implication": "…",
     "pie_chart_data": {{
       "owning_cost": {int(raw_data.owning_pct * 100)},
       "operational_cost": {int(raw_data.operational_pct * 100)}
@@ -552,122 +595,149 @@ Return JSON dengan struktur berikut:
     "period": "{analysis_data['bep_analysis']['years_formatted']}",
     "bep_km": "{analysis_data['bep_analysis']['kilometers']}",
     "category": "{analysis_data['bep_analysis']['category']}",
-    "short_sentence": "Kalimat singkat tentang waktu balik modal",
+    "short_sentence": "…",
     "monthly_simulation": {{
-        "installment": "Tidak berlaku" if not raw_data.uses_leasing else f"Rp {monthly_installment:,.0f} per bulan",
-        "revenue": "Tidak berlaku" if not raw_data.uses_leasing else f"Rp {monthly_revenue:,.0f} per bulan",
-        "net_cashflow": "Tidak berlaku" if not raw_data.uses_leasing else f"Rp {monthly_net_cashflow:,.0f} per bulan"
+      "installment": "{monthly_installment_str}",
+      "revenue": "{monthly_revenue_str}",
+      "net_cashflow": "{monthly_netcash_str}"
+
     }},
-    "bep_insight": "Analisis timeline balik modal dalam konteks bisnis transportasi, termasuk simulasi arus kas bulanan dan milestone-milestone penting yang akan dicapai. Jelaskan apakah waktu ini kompetitif atau perlu perbaikan strategi"
+    "bep_insight": "…"
   }},
   "contribution_margin_per_km": {{
     "margin_rp": "{analysis_data['margin_analysis']['per_km']}",
     "category": "{analysis_data['margin_analysis']['category']}",
-    "short_sentence": "Kalimat singkat tentang kesehatan margin kontribusi",
-    "margin_insight": "Analisis mendalam tentang margin per kilometer, ketahanannya terhadap fluktuasi biaya operasional atau persaingan harga, dan apakah margin ini cukup kuat untuk ekspansi atau perlu peningkatan efisiensi"
+    "short_sentence": "…",
+    "margin_insight": "…"
   }},
   "overall_insight": {{
-    "summary": "Ringkasan keseluruhan 1- 2 kalimat yang mengintegrasikan semua metrik (ROI, TCO, struktur biaya, BEP, dan margin) menjadi rekomendasi bisnis yang actionable. Jelaskan apakah investasi ini layak, apa kekuatan utamanya, dan area mana yang perlu perhatian khusus atau perbaikan"
+    "summary": "Paragraf ringkas (≤4 kalimat) bersifat deskriptif dan netral.",
+    "key_insight": "1 kalimat simpulan faktual (mis. selaras dengan kategori ROI)."
   }}
 }}"""
 
+    # ---------- Call Gemini safely ----------
     try:
-        # Define safety settings
-        safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE",
-            },
-        ]
+        model = genai.GenerativeModel(
+            model_name='gemini-2.5-flash',
+            system_instruction=(
+                "Anda menghasilkan deskripsi objektif. "
+                "Dilarang memberi saran, rekomendasi, atau ajakan bertindak. "
+                "Seluruh keluaran harus netral dan informatif."
+            ),
+        )
 
-        # Initialize Gemini model
-        model = genai.GenerativeModel('gemini-2.5-flash')
-
-        # Generate content using Gemini with JSON mode
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=8192,
-                temperature=0.5,
+                max_output_tokens=1200,
+                temperature=0.3,
                 response_mime_type="application/json",
             ),
-            safety_settings=safety_settings
+            safety_settings=[
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ],
         )
-        
-        # Check if response is valid before accessing text
-        if not response.candidates or not response.candidates[0].content.parts:
-            print("--- GEMINI BLOCKED RESPONSE ---")
-            print(f"Finish reason: {response.candidates[0].finish_reason if response.candidates else 'No candidates'}")
-            print("Prompt length:", len(prompt))
-            print("--- END DEBUG ---")
-            # Use fallback instead of raising error
-            raise ValueError("Gemini response was blocked by safety filters")
-        
-        # Extract the AI's response and parse as JSON
-        response_text = response.text.strip()
 
-        # Try to extract JSON from the response
-        if "```json" in response_text:
-            json_start = response_text.find("```json") + 7
-            json_end = response_text.find("```", json_start)
-            json_text = response_text[json_start:json_end].strip()
-        else:
-            json_text = response_text
-        
-        # Parse JSON response with better error handling
+        if not response.candidates or not response.candidates[0].content.parts:
+            return build_neutral_output(analysis_data, raw_data)
+
+        raw_text = response.text.strip()
         try:
-            raw_json = json.loads(json_text)
-        except json.JSONDecodeError as e:
-            print("--- JSON PARSING ERROR ---")
-            print(f"Error: {e}")
-            print(f"Response text (first 500 chars): {response_text[:500]}")
-            print("--- END ERROR ---")
-            raise
-        
-        # Add missing fields if not present in AI response
-        if "owning_vs_operational" in raw_json and "pie_chart_data" not in raw_json["owning_vs_operational"]:
-            raw_json["owning_vs_operational"]["pie_chart_data"] = {
-                "owning_cost": raw_json["owning_vs_operational"]["owning_percentage"],
-                "operational_cost": raw_json["owning_vs_operational"]["operational_percentage"]
+            data = json.loads(raw_text)
+        except json.JSONDecodeError:
+            if "```json" in raw_text:
+                s = raw_text.find("```json") + 7
+                e = raw_text.find("```", s)
+                json_text = raw_text[s:e].strip()
+                data = json.loads(json_text)
+            else:
+                return build_neutral_output(analysis_data, raw_data)
+
+        # Sanitasi output agar netral
+        if "overall_insight" in data:
+            data["overall_insight"]["summary"] = sanitize_neutral(data["overall_insight"].get("summary", ""))
+            data["overall_insight"]["key_insight"] = sanitize_neutral(data["overall_insight"].get("key_insight", ""))
+
+        # --- POST-PROCESS: paksa logika leasing/non-leasing ---
+        bep = data.get("break_even_point", {})
+        ms = bep.get("monthly_simulation", {})
+
+        if not raw_data.uses_leasing:
+            # Non-leasing → nolkan/disable simulasi bulanan
+            ms["installment"] = "Tidak berlaku (tanpa leasing)"
+            ms["revenue"] = "Tidak berlaku (tanpa leasing)"
+            ms["net_cashflow"] = "Tidak berlaku (tanpa leasing)"
+            bep["monthly_simulation"] = ms
+
+            # Ganti narasi BEP agar tidak menyebut cicilan
+            period = bep.get("period", analysis_data["bep_analysis"]["years_formatted"])
+            category = bep.get("category", analysis_data["bep_analysis"]["category"])
+            bep["bep_insight"] = sanitize_neutral(
+                pick_bep_non_leasing_sentence(period, category, seed=analysis_data["unit_info"]["name"])
+            )
+
+        else:
+            # Leasing aktif → pastikan angka simulasi sesuai perhitungan backend
+            monthly_installment = f"Rp {raw_data.annual_tco/12:,.0f}".replace(',', '.')
+            monthly_revenue = f"Rp {(raw_data.total_revenue/(raw_data.bep_years*12) if raw_data.bep_years > 0 else 0):,.0f}".replace(',', '.')
+            monthly_net = f"Rp {(raw_data.total_revenue/(raw_data.bep_years*12) - raw_data.annual_tco/12 if raw_data.bep_years > 0 else -raw_data.annual_tco/12):,.0f}".replace(',', '.')
+
+            ms["installment"] = f"{monthly_installment} per bulan"
+            ms["revenue"] = f"{monthly_revenue} per bulan"
+            ms["net_cashflow"] = f"{monthly_net} per bulan"
+            bep["monthly_simulation"] = ms
+
+        # Tulis kembali ke data
+        data["break_even_point"] = bep
+
+
+
+        if "owning_vs_operational" in data and "pie_chart_data" not in data["owning_vs_operational"]:
+            data["owning_vs_operational"]["pie_chart_data"] = {
+                "owning_cost": data["owning_vs_operational"]["owning_percentage"],
+                "operational_cost": data["owning_vs_operational"]["operational_percentage"],
             }
-        
-        # Convert to structured dataclasses
-        structured_data = VehicleROIOutput(
-            roi=ROIAnalysis(**raw_json["roi"]),
-            tco=TCOAnalysis(**raw_json["tco"]),
+
+        return VehicleROIOutput(
+            roi=ROIAnalysis(**data["roi"]),
+            tco=TCOAnalysis(**data["tco"]),
             owning_vs_operational=OwningVsOperational(
-                owning_percentage=raw_json["owning_vs_operational"]["owning_percentage"],
-                operational_percentage=raw_json["owning_vs_operational"]["operational_percentage"],
-                category=raw_json["owning_vs_operational"]["category"],
-                short_sentence=raw_json["owning_vs_operational"]["short_sentence"],
-                cashflow_implication=raw_json["owning_vs_operational"]["cashflow_implication"],
-                pie_chart_data=PieChartData(**raw_json["owning_vs_operational"]["pie_chart_data"])
+                owning_percentage=data["owning_vs_operational"]["owning_percentage"],
+                operational_percentage=data["owning_vs_operational"]["operational_percentage"],
+                category=data["owning_vs_operational"]["category"],
+                short_sentence=sanitize_neutral(data["owning_vs_operational"]["short_sentence"]),
+                cashflow_implication=sanitize_neutral(data["owning_vs_operational"]["cashflow_implication"]),
+                pie_chart_data=PieChartData(**data["owning_vs_operational"]["pie_chart_data"]),
             ),
             break_even_point=BreakEvenPoint(
-                period=raw_json["break_even_point"]["period"],
-                bep_km=raw_json["break_even_point"]["bep_km"],
-                category=raw_json["break_even_point"]["category"],
-                short_sentence=raw_json["break_even_point"]["short_sentence"],
-                monthly_simulation=MonthlySimulation(**raw_json["break_even_point"]["monthly_simulation"]),
-                bep_insight=raw_json["break_even_point"]["bep_insight"]
+                period=data["break_even_point"]["period"],
+                bep_km=data["break_even_point"]["bep_km"],
+                category=data["break_even_point"]["category"],
+                short_sentence=sanitize_neutral(data["break_even_point"]["short_sentence"]),
+                monthly_simulation=MonthlySimulation(**data["break_even_point"]["monthly_simulation"]),
+                bep_insight=sanitize_neutral(data["break_even_point"]["bep_insight"]),
             ),
-            contribution_margin_per_km=ContributionMargin(**raw_json["contribution_margin_per_km"]),
-            overall_insight=OverallInsight(**raw_json["overall_insight"])
+            contribution_margin_per_km=ContributionMargin(
+                **{
+                    "margin_rp": data["contribution_margin_per_km"]["margin_rp"],
+                    "category": data["contribution_margin_per_km"]["category"],
+                    "short_sentence": sanitize_neutral(data["contribution_margin_per_km"]["short_sentence"]),
+                    "margin_insight": sanitize_neutral(data["contribution_margin_per_km"]["margin_insight"]),
+                }
+            ),
+            overall_insight=OverallInsight(
+                summary=data["overall_insight"]["summary"],
+                key_insight=data["overall_insight"]["key_insight"],
+            ),
         )
-        
-        return structured_data
+
+    except Exception:
+        return build_neutral_output(analysis_data, raw_data)
+
     
     except Exception as e:
         # Return fallback structure if AI call fails
@@ -714,9 +784,108 @@ Return JSON dengan struktur berikut:
                 margin_insight="Error dalam menghasilkan insight AI. Menggunakan analisis fallback."
             ),
             overall_insight=OverallInsight(
-                summary=f"Error dalam menghasilkan insight AI: {str(e)}. Menggunakan analisis fallback."
+                summary=f"Error dalam menghasilkan insight AI: {str(e)}. Menggunakan analisis fallback.",
+                key_insight=""
             )
         )
+
+    # ==============================================================
+    #  BUSINESS NARRATIVE GENERATOR (untuk output seperti contoh kamu)
+    # ==============================================================
+def generate_business_narrative(analysis_data: Dict[str, Any], vd: VehicleInputData) -> Dict[str, str]:
+    """Generate formatted business insight narrative for presentation or frontend display."""
+    
+    # ROI
+    roi_val = analysis_data["roi_analysis"]["value"]
+    roi_cat = analysis_data["roi_analysis"]["category"]
+    roi_msg = analysis_data["roi_analysis"]["insight"]
+    roi_text = (
+        f"### ROI\n\n**{roi_val} – {roi_cat}**\n"
+        f"{roi_msg}.\n"
+        f"ROI ini menunjukkan bahwa **{vd.unit_name}** di segmen *{vd.segment}* memiliki potensi pengembalian modal yang solid. "
+        f"Dengan strategi operasional yang konsisten dan efisiensi biaya, profit dapat terus dipertahankan bahkan di pasar yang fluktuatif."
+    )
+
+    # TCO
+    tco_total = analysis_data["tco_analysis"]["total"]
+    tco_cat = analysis_data["tco_analysis"]["efficiency"]
+    tco_msg = analysis_data["tco_analysis"]["insight"]
+    tco_per_km = analysis_data["tco_analysis"]["per_km"]
+    tco_text = (
+        f"### TCO\n\n**{tco_total} – {tco_cat}**\n"
+        f"{tco_msg}.\n"
+        f"Dengan **biaya per km {tco_per_km}**, operasional {vd.unit_name} berada dalam kisaran efisien, "
+        f"memberikan ruang margin yang sehat dan menekan risiko tekanan biaya di masa mendatang."
+    )
+
+    # Cost Structure
+    own = analysis_data["cost_structure"]["owning_percentage"]
+    opx = analysis_data["cost_structure"]["operational_percentage"]
+    struct_cat = analysis_data["cost_structure"]["structure_type"]
+    struct_msg = analysis_data["cost_structure"]["insight"]
+    cost_structure_text = (
+        f"### Owning vs Operational Cost\n\n**Owning {own}** | **Operational {opx}** – {struct_cat}\n"
+        f"{struct_msg}.\n"
+        f"Porsi kepemilikan dan biaya operasional yang seimbang mengindikasikan distribusi CAPEX dan OPEX yang terkontrol, "
+        f"mendukung stabilitas arus kas tanpa ketergantungan berlebihan pada salah satu sisi."
+    )
+
+    # BEP
+    bep_period = analysis_data["bep_analysis"]["years_formatted"]
+    bep_km = analysis_data["bep_analysis"]["kilometers"]
+    bep_cat = analysis_data["bep_analysis"]["category"]
+    bep_msg = analysis_data["bep_analysis"]["insight"]
+    if vd.uses_leasing:
+        monthly_install = f"Rp {vd.annual_tco/12:,.0f}".replace(',', '.')
+        monthly_rev = f"Rp {vd.total_revenue/(vd.bep_years*12):,.0f}".replace(',', '.')
+        monthly_net = f"Rp {(vd.total_revenue/(vd.bep_years*12) - vd.annual_tco/12):,.0f}".replace(',', '.')
+        leasing_text = (
+            f"Dengan asumsi leasing aktif, estimasi cicilan bulanan **{monthly_install}**, "
+            f"pendapatan **{monthly_rev}**, dan net cashflow **{monthly_net}**."
+        )
+    else:
+        monthly_rev = f"Rp {vd.total_revenue/(vd.bep_years*12):,.0f}".replace(',', '.')
+        leasing_text = (
+            f"Dengan asumsi tanpa leasing, estimasi pendapatan bulanan sekitar **{monthly_rev}**, "
+            f"menunjukkan posisi aman untuk perencanaan jangka menengah."
+        )
+    bep_text = (
+        f"### Break Even Point\n\n**{bep_period} | {bep_km} – {bep_cat}**\n"
+        f"{bep_msg}.\n"
+        f"{leasing_text}"
+    )
+
+    # Margin
+    margin_val = analysis_data["margin_analysis"]["per_km"]
+    margin_cat = analysis_data["margin_analysis"]["category"]
+    margin_msg = analysis_data["margin_analysis"]["insight"]
+    margin_text = (
+        f"### Contribution Margin per KM\n\n**{margin_val} – {margin_cat}**\n"
+        f"{margin_msg}.\n"
+        f"Margin ini memberikan bantalan yang memadai untuk mengatasi kenaikan biaya bahan bakar atau perawatan, "
+        f"serta cukup fleksibel untuk memberikan diskon taktis pada kondisi pasar tertentu."
+    )
+
+    # Overall
+    overall_text = (
+        f"### Overall Insight\n\n"
+        f"**{vd.unit_name}** di segmen *{vd.segment}* menunjukkan profil investasi yang {roi_cat.lower()}, "
+        f"dengan ROI {roi_val} dan BEP {bep_period} yang tergolong {bep_cat.lower()}. "
+        f"TCO berada pada level {tco_cat.lower()}, struktur biaya {struct_cat.lower()}, "
+        f"dan margin kontribusi per km yang {margin_cat.lower()}. "
+        f"Kombinasi ini menciptakan fondasi kuat untuk menjaga profitabilitas dan fleksibilitas strategi harga.\n"
+        f"**Key Insight:** Fokus pada peningkatan utilisasi dan volume muatan berpotensi mempercepat BEP dan mendorong ROI di atas 120%."
+    )
+
+    return {
+        "ROI": roi_text,
+        "TCO": tco_text,
+        "CostStructure": cost_structure_text,
+        "BreakEven": bep_text,
+        "Margin": margin_text,
+        "Overall": overall_text,
+    }
+
 
 # Initialize the vehicle ROI analyzer
 analyzer = VehicleROIAnalyzer()
@@ -734,46 +903,38 @@ def health_check():
             "/analyze": "Vehicle ROI analysis endpoint"
         }
     })
-
+    
 @app.route('/analyze', methods=['POST'])
 def analyze_vehicle_roi():
     """
     Main API endpoint untuk analisis ROI kendaraan dengan output terstruktur untuk frontend.
-    
-    Expects JSON data dengan metrics kendaraan sesuai dengan VehicleInputData schema.
-    
-    Returns:
-        JSON response dengan format terstruktur sesuai VehicleROIOutput untuk frontend
     """
     try:
-        # Get JSON data from the HTTP request
         request_data = request.json
-        
-        # Validate that data was provided
         if not request_data:
             return jsonify({"error": "Tidak ada data yang diberikan"}), 400
-        
-        # Validate and deserialize input data using dataclass validation
+
         try:
             validated_data = validate_vehicle_data(request_data)
         except ValueError as err:
             return jsonify({"error": "Validasi data gagal", "details": str(err)}), 400
-        
-        # Process the validated data through Python analysis functions
+
         structured_analysis = analyzer.process_vehicle_data(validated_data)
-        
-        # Generate AI-powered structured analysis for frontend
         frontend_analysis = generate_structured_analysis(structured_analysis, validated_data)
-        
-        # Convert dataclass to dictionary for JSON serialization
-        response_data = asdict(frontend_analysis)
-        
-        # Return the structured format that matches frontend requirements
+        business_narrative = generate_business_narrative(structured_analysis, validated_data)
+
+        from dataclasses import is_dataclass
+        if is_dataclass(frontend_analysis):
+            response_data = asdict(frontend_analysis)
+        else:
+            response_data = frontend_analysis
+
+        response_data["business_narrative"] = business_narrative
         return jsonify(response_data)
-    
+
     except Exception as e:
-        # Return error response if anything fails
         return jsonify({"error": f"Analisis gagal: {str(e)}"}), 500
+
 
 # Main execution block - only runs when script is executed directly (not imported)
 if __name__ == '__main__':
